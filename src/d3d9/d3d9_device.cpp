@@ -7901,21 +7901,15 @@ namespace dxvk {
 
   template <D3D9ShaderType ShaderStage>
   void D3D9DeviceEx::BindFFUbershader() {
-    if (ShaderStage == D3D9ShaderType::VertexShader) {
-      EmitCs([
-       &cShaders = m_ffModules
-      ](DxvkContext* ctx) {
-        auto shader = cShaders.GetVSUbershaderModule();
-        ctx->bindShader<VK_SHADER_STAGE_VERTEX_BIT>(shader.GetShader());
-      });
-    } else {
-      EmitCs([
-       &cShaders = m_ffModules
-      ](DxvkContext* ctx) {
-        auto shader = cShaders.GetFSUbershaderModule();
-        ctx->bindShader<VK_SHADER_STAGE_FRAGMENT_BIT>(shader.GetShader());
-      });
-    }
+    constexpr VkShaderStageFlagBits Stage = ShaderStage == D3D9ShaderType::VertexShader
+      ? VK_SHADER_STAGE_VERTEX_BIT
+      : VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    EmitCs([
+      cShader = m_ffModules.GetShader<ShaderStage>()
+    ](DxvkContext* ctx) mutable {
+      ctx->bindShader<Stage>(std::move(cShader));
+    });
   }
 
 
@@ -8438,24 +8432,9 @@ namespace dxvk {
     }
 
     // Shader...
-    const bool useUbershader = m_d3d9Options.ffUbershaderVS;
-
-    if (useUbershader && m_dirty.test(D3D9DeviceDirtyFlag::FFVertexShader)) {
+    if (m_dirty.test(D3D9DeviceDirtyFlag::FFVertexShader)) {
       m_dirty.clr(D3D9DeviceDirtyFlag::FFVertexShader);
       m_dirty.set(D3D9DeviceDirtyFlag::FFVertexData);
-    } else if (m_dirty.test(D3D9DeviceDirtyFlag::FFVertexShader)) {
-      m_dirty.clr(D3D9DeviceDirtyFlag::FFVertexShader);
-
-      D3D9FFShaderKeyVS key = BuildFFKeyVS(vertexBlendMode, indexedVertexBlend);
-
-      EmitCs([
-        this,
-        cKey     = key,
-       &cShaders = m_ffModules
-      ](DxvkContext* ctx) {
-        auto shader = cShaders.GetShaderModule(this, cKey);
-        ctx->bindShader<VK_SHADER_STAGE_VERTEX_BIT>(shader.GetShader());
-      });
     }
 
     // Viewport...
@@ -8522,9 +8501,7 @@ namespace dxvk {
 
       data->Material = m_state.material;
       data->TweenFactor = bit::cast<float>(m_state.renderStates[D3DRS_TWEENFACTOR]);
-      if (useUbershader) {
-        data->Key = BuildFFKeyVS(vertexBlendMode, indexedVertexBlend).Data;
-      }
+      data->Key = BuildFFKeyVS(vertexBlendMode, indexedVertexBlend).Data;
     }
 
     if (m_dirty.test(D3D9DeviceDirtyFlag::FFVertexBlend) && vertexBlendMode == D3D9FF_VertexBlendMode_Normal) {
@@ -8622,10 +8599,9 @@ namespace dxvk {
       return;
 
     // Shader...
-    const bool useUbershader = m_d3d9Options.ffUbershaderFS;
-
     D3D9FFShaderKeyFS key = BuildFFKeyFS();
-    if (useUbershader && m_dirty.test(D3D9DeviceDirtyFlag::FFPixelShader)) {
+
+    if (m_dirty.test(D3D9DeviceDirtyFlag::FFPixelShader)) {
       // The flags are set based on the specialized shaders.
       m_dirty.clr(D3D9DeviceDirtyFlag::FFPixelShader);
       m_dirty.set(D3D9DeviceDirtyFlag::FFPixelData);
@@ -8674,17 +8650,6 @@ namespace dxvk {
       if (dirty) {
         m_dirty.set(D3D9DeviceDirtyFlag::SpecializationEntries);
       }
-    } else if (m_dirty.test(D3D9DeviceDirtyFlag::FFPixelShader)) {
-      m_dirty.clr(D3D9DeviceDirtyFlag::FFPixelShader);
-
-      EmitCs([
-        this,
-        cKey     = key,
-       &cShaders = m_ffModules
-      ](DxvkContext* ctx) {
-        auto shader = cShaders.GetShaderModule(this, cKey);
-        ctx->bindShader<VK_SHADER_STAGE_FRAGMENT_BIT>(shader.GetShader());
-      });
     }
 
     // Constants...
@@ -8696,9 +8661,7 @@ namespace dxvk {
 
       D3D9FixedFunctionPS* data = reinterpret_cast<D3D9FixedFunctionPS*>(mapPtr);
       DecodeD3DCOLOR((D3DCOLOR)rs[D3DRS_TEXTUREFACTOR], data->textureFactor.data);
-      if (useUbershader) {
-        data->Key = key;
-      }
+      data->Key = key;
     }
   }
 
