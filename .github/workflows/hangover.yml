@@ -73,7 +73,11 @@ jobs:
       run: docker image load -i foundationubuntu2204.tgz
 
     - name: get version
-      run: echo DXVKVERSION=$(git -C dxvk describe --abbrev=0) >> "$GITHUB_ENV"; echo DXVKVERSION=$(git -C dxvk describe --abbrev=0)
+      run: |
+        cd dxvk
+        VERSION=$(git describe --abbrev=0 2>/dev/null || echo "2.7.1")
+        echo "DXVKVERSION=$VERSION" >> "$GITHUB_ENV"
+        echo "DXVKVERSION=$VERSION"
 
     - name: Setup packaging
       run: |
