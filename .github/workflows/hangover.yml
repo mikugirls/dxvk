@@ -47,7 +47,6 @@ jobs:
       if: ${{ steps.cache-foundation.outputs.cache-hit != 'true' }}
       run: docker image save foundation${{ matrix.os }} | gzip -c > foundation${{ matrix.os }}.tgz
 
-
   dxvk:
     needs: foundations
     runs-on: ubuntu-latest
@@ -84,7 +83,7 @@ jobs:
         cp -r dxvk/.packaging/ubuntu2204/dxvk/* dxvk
 
     - name: Build package
-      run: cd dxvk; docker build -t dxvk .
+      run: cd dxvk; docker build --build-arg DXVK_VERSION=${{ env.DXVKVERSION }} -t dxvk .
 
     - name: Extract package
       run: docker run --rm dxvk cat /opt/dxvk/output/dxvk-${{ env.DXVKVERSION }}.tar.gz > dxvk-${{ env.DXVKVERSION }}.tar.gz
