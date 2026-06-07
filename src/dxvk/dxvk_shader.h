@@ -9,8 +9,6 @@
 #include "dxvk_shader_io.h"
 
 #include "../spirv/spirv_code_buffer.h"
-#include "../spirv/spirv_compression.h"
-#include "../spirv/spirv_module.h"
 
 namespace dxvk {
   
@@ -83,6 +81,8 @@ namespace dxvk {
     LowerConstantArrays         = 11u,
     /// Whether to enable semantic-based I/O interface matching
     SemanticIo                  = 12u,
+    /// Whether to explicitly use BDA for fully-bound constant buffers.
+    LowerInBoundsCbvToBda       = 13u,
   };
 
   using DxvkShaderCompileFlags = Flags<DxvkShaderCompileFlag>;
@@ -132,6 +132,8 @@ namespace dxvk {
     /// Whether dynamic non-uniform resource indexing is
     /// supported. Only applies to typed resources.
     SupportsResourceIndexing    = 20u,
+    /// Whether descriptor heap is used as the binding model.
+    SupportsDescriptorHeap      = 21u,
   };
 
   using DxvkShaderSpirvFlags = Flags<DxvkShaderSpirvFlag>;

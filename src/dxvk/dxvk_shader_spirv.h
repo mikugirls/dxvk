@@ -4,6 +4,8 @@
 
 #include "dxvk_shader.h"
 
+#include "../spirv/spirv_code_buffer.h"
+
 namespace dxvk {
 
   /**
@@ -114,7 +116,7 @@ namespace dxvk {
 
     DxvkSpirvShaderCreateInfo     m_info  = { };
 
-    SpirvCompressedBuffer         m_code;
+    SpirvCodeBuffer               m_code;
     DxvkPipelineLayoutBuilder     m_layout;
 
     std::string                   m_debugName;

@@ -401,11 +401,10 @@ namespace dxvk {
     dxbc_spv::ir::SsaDef emitSpecConstantCbv() {
       using namespace dxbc_spv;
 
-      auto result = m_builder.add(ir::Op::DclCbv(
-        ir::Type(ir::ScalarType::eU32).addArrayDimension(DxvkLimits::MaxNumSpecConstants),
-        m_entryPoint, 0u, uint32_t(D3D9IrCbvIndex::SpecData), 1u));
-      m_builder.add(ir::Op::DebugName(result, "spec_data"));
-
+      auto specDataType = ir::Type(ir::ScalarType::eU32).addArrayDimension(DxvkLimits::MaxNumSpecConstants);
+      auto result = m_builder.add(ir::Op::DclCbv(specDataType, m_entryPoint,
+        0u, uint32_t(D3D9IrCbvIndex::SpecData), 1u).setFlags(ir::OpFlag::eInBounds));
+      m_builder.add(ir::Op::DebugName(result, "specData"));
       return result;
     }
 
@@ -428,7 +427,8 @@ namespace dxvk {
         m_specCbv = emitSpecConstantCbv();
 
       auto cbvDescriptor = m_builder.add(ir::Op::DescriptorLoad(ir::ScalarType::eCbv, m_specCbv, m_builder.makeConstant(0u)));
-      auto cbvLoad = m_builder.add(ir::Op::BufferLoad(ir::ScalarType::eU32, cbvDescriptor, m_builder.makeConstant(layout.dwordOffset), 4u));
+      auto cbvLoad = m_builder.add(ir::Op::BufferLoad(ir::ScalarType::eU32, cbvDescriptor,
+        m_builder.makeConstant(layout.dwordOffset), 4u).setFlags(ir::OpFlag::eInBounds));
 
       auto dword = m_builder.add(ir::Op::Select(ir::ScalarType::eU32, m_specSelector, specDef, cbvLoad));
 
@@ -716,7 +716,8 @@ namespace dxvk {
 
       if (!m_clipPlaneCbv) {
         m_clipPlaneCbv = m_builder.add(ir::Op::DclCbv(clipCbvType,
-          m_entryPoint, 0u, uint32_t(D3D9IrCbvIndex::VsClipping), 1u));
+          m_entryPoint, 0u, uint32_t(D3D9IrCbvIndex::VsClipping), 1u)
+          .setFlags(ir::OpFlag::eInBounds));
         m_builder.add(ir::Op::DebugName(m_clipPlaneCbv, "clipPlanes"));
       }
 
@@ -740,8 +741,8 @@ namespace dxvk {
               ir::ScalarType::eCbv, m_clipPlaneCbv, m_builder.makeConstant(0u)));
             auto index = m_builder.makeConstant(i - uint32_t(ir::LegacyClipPlaneLayout::eClipPlane0));
 
-            resultOp.addOperand(m_builder.addBefore(ref, ir::Op::BufferLoad(
-              clipCbvType.getSubType(0u), descriptor, index, 16u)));
+            resultOp.addOperand(m_builder.addBefore(ref, ir::Op::BufferLoad(clipCbvType.getSubType(0u),
+              descriptor, index, 16u).setFlags(ir::OpFlag::eInBounds)));
           } break;
         }
       }
@@ -900,7 +901,8 @@ namespace dxvk {
 
       if (!m_textureStageCbv) {
         m_textureStageCbv = m_builder.add(ir::Op::DclCbv(textureStageCbvType,
-          m_entryPoint, 0u, uint32_t(D3D9IrCbvIndex::PsTextureStages), 1u));
+          m_entryPoint, 0u, uint32_t(D3D9IrCbvIndex::PsTextureStages), 1u)
+          .setFlags(ir::OpFlag::eInBounds));
 
         m_builder.add(ir::Op::DebugName(m_textureStageCbv, "textureStages"));
         m_builder.add(ir::Op::DebugMemberName(m_textureStageCbv, 0u, "constant"));
@@ -936,7 +938,8 @@ namespace dxvk {
         // Members in this struct are naturally aligned
         resultOp.addOperand(m_builder.addBefore(ref, ir::Op::BufferLoad(
           textureStageCbvType.getBaseType(member), descriptor, address,
-          textureStageCbvType.getBaseType(member).byteSize())));
+          textureStageCbvType.getBaseType(member).byteSize())
+          .setFlags(ir::OpFlag::eInBounds)));
       }
 
       return m_builder.addBefore(ref, std::move(resultOp));
@@ -1135,74 +1138,18 @@ namespace dxvk {
     const std::string name = ShaderKey.toString();
     Logger::debug(str::format("Compiling shader ", name));
     
-    // If requested by the user, dump both the raw DXBC
-    // shader and the compiled SPIR-V module to a file.
-    const std::string& dumpPath = pDevice->GetOptions()->shaderDumpPath;
-    
-    if (dumpPath.size() != 0) {
-      const uint32_t bytecodeLength = m_analysis.GetLength();
-
-      std::ofstream file(str::topath(str::format(dumpPath, "/", name, ".sm3_dxbc").c_str()).c_str(), std::ios_base::binary | std::ios_base::trunc);
-      file.write(reinterpret_cast<const char*>(pShaderBytecode), bytecodeLength);
-    }
-
-    if (pDevice->GetOptions()->useDxbcSpirv)
-      CreateIrShader(pDevice, ShaderKey, ModuleInfo, pShaderBytecode, m_analysis);
-    else
-      CreateLegacyShader(pDevice, ShaderKey, ModuleInfo, pShaderBytecode);
-
-    if (!dumpPath.empty()) {
-      std::ofstream dumpStream(
-        str::topath(str::format(dumpPath, "/", name, ".spv").c_str()).c_str(),
-        std::ios_base::binary | std::ios_base::trunc);
-      m_shader->dump(dumpStream);
-    }
-
-    pDevice->GetDXVKDevice()->registerShader(m_shader);
-  }
-
-
-  void D3D9CommonShader::CreateIrShader(
-          D3D9DeviceEx*           pDevice,
-    const DxvkShaderHash&         ShaderKey,
-    const D3D9ShaderCreateInfo&   ModuleInfo,
-    const void*                   pShaderBytecode,
-    const D3D9ShaderAnalysis&     ShaderAnalysis) {
     m_shader = pDevice->GetDXVKDevice()->createCachedShader(
       ShaderKey.toString(), ModuleInfo.irCreateInfo, nullptr);
 
     if (!m_shader) {
       Rc<D3D9ShaderConverter> converter = new D3D9ShaderConverter(ShaderKey,
-        ModuleInfo.shaderOptions, pShaderBytecode, ShaderAnalysis);
+        ModuleInfo.shaderOptions, pShaderBytecode, m_analysis);
 
       m_shader = pDevice->GetDXVKDevice()->createCachedShader(
         ShaderKey.toString(), ModuleInfo.irCreateInfo, std::move(converter));
     }
-  }
 
-
-  void D3D9CommonShader::CreateLegacyShader(
-            D3D9DeviceEx*         pDevice,
-      const DxvkShaderHash&       ShaderKey,
-      const D3D9ShaderCreateInfo& ModuleInfo,
-      const void*                 pShaderBytecode) {
-
-    DxsoReader reader(
-      reinterpret_cast<const char*>(pShaderBytecode));
-    DxsoModule module(reader);
-
-    const D3D9ConstantLayout& constantLayout = module.info().shaderStage() == VK_SHADER_STAGE_VERTEX_BIT
-      ? pDevice->GetVertexConstantLayout()
-      : pDevice->GetPixelConstantLayout();
-
-    DxsoModuleInfo moduleInfo;
-    moduleInfo.options.d3d9FloatEmulation = ModuleInfo.shaderOptions.d3d9FloatEmulation;
-    moduleInfo.options.forceSamplerTypeSpecConstants = ModuleInfo.shaderOptions.forceSamplerTypeSpecConstants;
-    moduleInfo.options.sincosEmulation = ModuleInfo.irCreateInfo.options.flags.test(DxvkShaderCompileFlag::LowerSinCos);
-    moduleInfo.options.forceSampleRateShading = ModuleInfo.irCreateInfo.options.flags.test(DxvkShaderCompileFlag::EnableSampleRateShading);
-    moduleInfo.options.vertexFloatConstantBufferAsSSBO = ModuleInfo.irCreateInfo.options.maxUniformBufferSize < constantLayout.totalSize();
-
-    m_shader       = module.compile(moduleInfo, ShaderKey.toString(), module.analyze(), constantLayout);
+    pDevice->GetDXVKDevice()->registerShader(m_shader);
   }
 
 
