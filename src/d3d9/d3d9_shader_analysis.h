@@ -39,7 +39,131 @@ struct D3D9ShaderConstantsInfo {
 
 using D3D9RenderTargetMask = uint8_t;
 using D3D9SamplerMask      = uint32_t;
-using D3D9InputSignature   = small_vector<dxbc_spv::sm3::Semantic, 16u>;
+
+/**
+ * \brief Packed semantic
+ *
+ * Extremely compact representation of a semantic
+ * that can be used for look-up purposes.
+ */
+struct D3D9PackedSemantic {
+  D3D9PackedSemantic() = default;
+
+  explicit D3D9PackedSemantic(uint8_t packed)
+  : usage(packed), index(packed >> 4u) { }
+
+  explicit D3D9PackedSemantic(dxbc_spv::sm3::Semantic semantic)
+  : usage(uint8_t(semantic.usage))
+  , index(uint8_t(semantic.index)) { }
+
+  explicit operator dxbc_spv::sm3::Semantic() const {
+    dxbc_spv::sm3::Semantic semantic = {};
+    semantic.usage = dxbc_spv::sm3::SemanticUsage(usage);
+    semantic.index = index;
+    return semantic;
+  }
+
+  explicit operator uint8_t() const {
+    return uint8_t(usage) | (uint8_t(index) << 4u);
+  }
+
+  uint8_t usage : 4u;
+  uint8_t index : 4u;
+};
+
+/**
+ * \brief Input signature
+ *
+ * Fixed-size structure that stores the semantic that
+ * corresponds to any given vertex shader inputs.
+ */
+class D3D9InputSignature {
+  // Abuse last element as the element count so that we
+  // can fit the entire structure into two SSE registers
+  static constexpr size_t SizeIndex = 31u;
+public:
+
+  D3D9InputSignature() {
+    // Populate with 'invalid' semantics
+    for (size_t i = 0u; i < SizeIndex; i++)
+      m_entries[i] = 0xffu;
+  }
+
+  /**
+   * \brief Number of valid entries in the signature
+   * \returns Number of signature entries
+   */
+  uint32_t size() const {
+    return m_entries[SizeIndex];
+  }
+
+  /**
+   * \brief Retrieves packed representation of a semantic
+   *
+   * \param [in] index Input register index
+   * \returns Semantic bound to the given register
+   */
+  D3D9PackedSemantic getPacked(uint32_t index) const {
+    return D3D9PackedSemantic(m_entries[index]);
+  }
+
+  /**
+   * \brief Retrieves semantic for a given register
+   *
+   * \param [in] index Input register index
+   * \returns Semantic bound to the given register
+   */
+  dxbc_spv::sm3::Semantic get(uint32_t index) const {
+    return dxbc_spv::sm3::Semantic(getPacked(index));
+  }
+
+  /**
+   * \brief Adds an input register with a given semantic
+   * \param [in] semantic Semantic to add
+   */
+  void add(dxbc_spv::sm3::Semantic semantic) {
+    dxbc_spv_assert(semantic.index < 16u);
+
+    auto index = m_entries[SizeIndex]++;
+    m_entries.at(index) = uint8_t(D3D9PackedSemantic(semantic));
+  }
+
+  /**
+   * \brief Finds input register for a given semantic
+   *
+   * Returns an out-of-bounds index if no register
+   * uses the given semantic.
+   * \param [in] semantic Semantic to find
+   * \returns Register index, if any, for given semantic
+   */
+  uint32_t find(dxbc_spv::sm3::Semantic semantic) const {
+    auto packed = uint8_t(D3D9PackedSemantic(semantic));
+
+    #if defined(DXVK_ARCH_X86) && (defined(__GNUC__) || defined(__clang__) || defined(_MSC_VER))
+    __m128i compareMask = _mm_set1_epi32(uint32_t(packed) * 0x01010101u);
+
+    __m128i eq0 = _mm_cmpeq_epi8(compareMask, _mm_loadu_si128(reinterpret_cast<const __m128i*>(&m_entries[ 0u])));
+    __m128i eq1 = _mm_cmpeq_epi8(compareMask, _mm_loadu_si128(reinterpret_cast<const __m128i*>(&m_entries[16u])));
+
+    uint32_t bits0 = _mm_movemask_epi8(eq0);
+    uint32_t bits1 = _mm_movemask_epi8(eq1);
+
+    return bit::tzcnt(bits0 | (bits1 << 16u));
+    #else
+    for (uint32_t i = 0u; i < SizeIndex; i++) {
+      if (m_entries[i] == packed)
+        return i;
+    }
+
+    return m_entries.size();
+    #endif
+  }
+
+private:
+
+  std::array<uint8_t, SizeIndex + 1u> m_entries = {};
+
+};
 
 class D3D9ShaderAnalysis {
 

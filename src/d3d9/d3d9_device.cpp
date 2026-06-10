@@ -7707,105 +7707,119 @@ namespace dxvk {
   void D3D9DeviceEx::BindInputLayout() {
     m_dirty.clr(D3D9DeviceDirtyFlag::InputLayout);
 
-    if (m_state.vertexDecl == nullptr) {
-      EmitCs([&cIaState = m_iaState] (DxvkContext* ctx) {
-        cIaState.streamsUsed = 0;
-        ctx->setInputLayout(0, nullptr, 0, nullptr);
-      });
-    }
-    else {
+    if (likely(m_state.vertexDecl)) {
       std::array<uint32_t, caps::MaxStreams> streamFreq;
 
       for (uint32_t i = 0; i < caps::MaxStreams; i++)
         streamFreq[i] = m_state.streamFreq[i];
 
-      Com<D3D9VertexDecl,   false> vertexDecl = m_state.vertexDecl;
-      Com<D3D9VertexShader, false> vertexShader;
+      const auto& vertexElements = m_state.vertexDecl->GetElements();
 
-      if (UseProgrammableVS())
-        vertexShader = m_state.vertexShader;
+      const auto& inputSignature = UseProgrammableVS()
+        ? GetCommonShader(m_state.vertexShader)->GetInputSignature()
+        : GetFixedFunctionIsgn();
 
-      EmitCs([
+      auto elementCount = vertexElements.size();
+      auto elementData = EmitCsCmd<D3DVERTEXELEMENT9>(elementCount, [
         &cIaState         = m_iaState,
-        cVertexDecl       = std::move(vertexDecl),
-        cVertexShader     = std::move(vertexShader),
+        cInputSignature   = inputSignature,
         cStreamsInstanced = m_vbSlotTracking.instanced,
         cStreamFreq       = streamFreq
-      ] (DxvkContext* ctx) {
-        cIaState.streamsInstanced = cStreamsInstanced;
-        cIaState.streamsUsed      = 0;
+      ] (DxvkContext* ctx, const D3DVERTEXELEMENT9* elements, uint32_t elementCount) {
+        uint32_t attrCount = cInputSignature.size();
 
-        const auto& elements = cVertexDecl->GetElements();
+        // Map each vertex declaration entry to an attribute
+        std::array<uint8_t, caps::InputRegisterCount * 2u> attrMap;
+        std::fill(attrMap.begin(), attrMap.end(), 0xffu);
 
-        std::array<DxvkVertexInput, 2 * caps::InputRegisterCount> attrList = { };
-        std::array<DxvkVertexInput, 2 * caps::InputRegisterCount> bindList = { };
-        std::array<uint32_t, 2 * caps::InputRegisterCount> vertexSizes = { };
+        for (uint32_t i = 0u; i < elementCount; i++) {
+          dxbc_spv::sm3::Semantic elementSemantic = {};
+          elementSemantic.usage = dxbc_spv::sm3::SemanticUsage(elements[i].Usage);
+          elementSemantic.index = elements[i].UsageIndex;
 
-        uint32_t attrMask = 0;
+          if (elementSemantic.usage == dxbc_spv::sm3::SemanticUsage::ePositionT)
+            elementSemantic.usage = dxbc_spv::sm3::SemanticUsage::ePosition;
+
+          uint32_t index = cInputSignature.find(elementSemantic);
+
+          if (index < attrCount)
+            attrMap[index] = uint8_t(i);
+        }
+
+        // Fixed-function can have a lot of attributes...
+        std::array<DxvkVertexInput, caps::InputRegisterCount * 2u> attrList = {};
+        std::array<DxvkVertexInput, caps::MaxStreams + 1u> bindList = {};
+        std::array<uint16_t,        caps::MaxStreams + 1u> vertexSizes = {};
+
         uint32_t bindMask = 0;
 
-        const auto& isgn = cVertexShader != nullptr
-          ? GetCommonShader(cVertexShader)->GetInputSignature()
-          : GetFixedFunctionIsgn();
-
-        for (uint32_t i = 0; i < isgn.size(); i++) {
-          const auto& shaderElementSemantic = isgn[i];
-
-          DxvkVertexAttribute attrib = { };
+        for (uint32_t i = 0; i < attrCount; i++) {
+          DxvkVertexAttribute attrib = {};
           attrib.location = i;
-          attrib.binding  = NullStreamIdx;
-          attrib.format   = VK_FORMAT_R32G32B32A32_SFLOAT;
-          attrib.offset   = 0;
 
-          for (const auto& element : elements) {
-            dxbc_spv::sm3::Semantic elementSemantic = { static_cast<dxbc_spv::sm3::SemanticUsage>(element.Usage), element.UsageIndex };
-            if (elementSemantic.usage == dxbc_spv::sm3::SemanticUsage::ePositionT)
-              elementSemantic.usage = dxbc_spv::sm3::SemanticUsage::ePosition;
+          if (likely(attrMap[i] < elementCount)) {
+            const auto& element = elements[attrMap[i]];
+            attrib.binding = uint32_t(element.Stream);
+            attrib.format = DecodeDecltype(D3DDECLTYPE(element.Type));
+            attrib.offset = element.Offset;
 
-            if (elementSemantic == shaderElementSemantic) {
-              attrib.binding = uint32_t(element.Stream);
-              attrib.format  = DecodeDecltype(D3DDECLTYPE(element.Type));
-              attrib.offset  = element.Offset;
-
-              cIaState.streamsUsed |= 1u << attrib.binding;
-              break;
-            }
+            bindMask |= 1u << attrib.binding;
+          } else {
+            attrib.binding = NullStreamIdx;
+            attrib.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+            attrib.offset = 0;
           }
 
           attrList[i] = DxvkVertexInput(attrib);
 
           vertexSizes[attrib.binding] = std::max(vertexSizes[attrib.binding],
-            uint32_t(attrib.offset + lookupFormatInfo(attrib.format)->elementSize));
-
-          DxvkVertexBinding binding = { };
-          binding.binding = attrib.binding;
-          binding.extent = vertexSizes[attrib.binding];
-
-          uint32_t instanceData = cStreamFreq[binding.binding % caps::MaxStreams];
-
-          if (instanceData & D3DSTREAMSOURCE_INSTANCEDATA) {
-            binding.divisor = instanceData & 0x7FFFFF; // Remove instance packed-in flags in the data.
-            binding.inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
-          }
-          else {
-            binding.divisor = 0u;
-            binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-          }
-
-          bindList[binding.binding] = DxvkVertexInput(binding);
-
-          attrMask |= 1u << i;
-          bindMask |= 1u << binding.binding;
+            uint16_t(attrib.offset + lookupFormatInfo(attrib.format)->elementSize));
         }
 
-        // Compact the attribute and binding lists to filter
-        // out attributes and bindings not used by the shader
-        uint32_t attrCount = CompactSparseList(attrList.data(), attrMask);
-        uint32_t bindCount = CompactSparseList(bindList.data(), bindMask);
+        // Set up compacted bindings for all streams referenced by the
+        // attributes, including a dummy null binding if necessary.
+        uint32_t bindCount = 0u;
+
+        for (auto i : bit::BitMask(bindMask)) {
+          DxvkVertexBinding binding = { };
+          binding.binding = i;
+          binding.extent = vertexSizes[i];
+
+          if (likely(i < NullStreamIdx)) {
+            uint32_t instanceData = cStreamFreq[binding.binding % caps::MaxStreams];
+
+            if (instanceData & D3DSTREAMSOURCE_INSTANCEDATA) {
+              // Remove instance packed-in flags in the data.
+              binding.divisor = instanceData & 0x7fffffu;
+              binding.inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
+            } else {
+              binding.divisor = 0u;
+              binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+            }
+          } else {
+            // Dummy binding, just fetch the same null value
+            binding.divisor = 0u;
+            binding.inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
+          }
+
+          bindList[bindCount++] = DxvkVertexInput(binding);
+        }
 
         ctx->setInputLayout(
           attrCount, attrList.data(),
           bindCount, bindList.data());
+
+        // Write feedback. This is only used on the CS thread.
+        cIaState.streamsInstanced = cStreamsInstanced;
+        cIaState.streamsUsed = bindMask;
+      });
+
+      for (uint32_t i = 0u; i < elementCount; i++)
+        elementData[i] = vertexElements[i];
+    } else {
+      EmitCs([&cIaState = m_iaState] (DxvkContext* ctx) {
+        cIaState.streamsUsed = 0;
+        ctx->setInputLayout(0, nullptr, 0, nullptr);
       });
     }
   }
