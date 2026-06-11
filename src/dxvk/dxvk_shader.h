@@ -18,26 +18,6 @@ namespace dxvk {
   struct DxvkPipelineStats;
 
   /**
-   * \brief Push data to handle built-ins
-   */
-  struct DxvkBuiltInPushData {
-    static constexpr uint32_t SampleCountOffset = 0u;
-    static constexpr uint32_t SampleCountBits = 8u;
-
-    static constexpr uint32_t MaxTessFactorOffset = SampleCountOffset + SampleCountBits;
-    static constexpr uint32_t MaxTessFactorBits = 8u;
-
-    DxvkBuiltInPushData() = default;
-
-    explicit DxvkBuiltInPushData(uint32_t sampleCount, uint32_t maxTessFactor)
-    : builtIns((sampleCount   << SampleCountOffset)
-             | (maxTessFactor << MaxTessFactorOffset)) { }
-
-    uint32_t builtIns = 0u;
-  };
-
-
-  /**
    * \brief Shader compile flags
    */
   enum class DxvkShaderCompileFlag : uint32_t {
@@ -59,9 +39,9 @@ namespace dxvk {
     /// Whether the device supports 16-bit int and float
     /// arithmetic. Effectively enables min16 lowering.
     Supports16BitArithmetic     = 5u,
-    /// Whether 16-bit push data is supported. Used to
-    /// pack sampler indices in the binding model
-    Supports16BitPushData       = 6u,
+    /// Whether 16-bit and 8-bit push data is supported.
+    /// Used to pack sampler indices in the binding model.
+    SupportsSubDwordPushData    = 6u,
     /// Whether to lower unsigned int to float conversions.
     /// Needed to work around an Nvidia driver bug.
     LowerItoF                   = 7u,
