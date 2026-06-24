@@ -16,7 +16,7 @@ jobs:
         os: [ubuntu2204]
 
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
     - name: free disk space
       run: |
         sudo swapoff -a
@@ -26,7 +26,7 @@ jobs:
 
     - name: Cache docker image
       id: cache-foundation
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       env:
         cache-name: cache-foundation
       with:
@@ -52,7 +52,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
       with:
         fetch-tags: true
         submodules: recursive
@@ -61,7 +61,7 @@ jobs:
 
     - name: Cache docker image
       id: cache-foundation
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       env:
         cache-name: cache-foundation
       with:
@@ -89,7 +89,7 @@ jobs:
       run: docker run --rm dxvk cat /opt/dxvk/output/dxvk-${{ env.DXVKVERSION }}.tar.gz > dxvk-${{ env.DXVKVERSION }}.tar.gz
 
     - name: Upload Artifact
-      uses: actions/upload-artifact@v5
+      uses: actions/upload-artifact@v6
       with:
         name: dxvk-${{ env.DXVKVERSION }}.tar.gz
         path: dxvk-${{ env.DXVKVERSION }}.tar.gz
