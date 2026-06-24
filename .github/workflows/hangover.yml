@@ -89,7 +89,7 @@ jobs:
       run: docker run --rm dxvk cat /opt/dxvk/output/dxvk-${{ env.DXVKVERSION }}.tar.gz > dxvk-${{ env.DXVKVERSION }}.tar.gz
 
     - name: Upload Artifact
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       with:
         name: dxvk-${{ env.DXVKVERSION }}.tar.gz
         path: dxvk-${{ env.DXVKVERSION }}.tar.gz
