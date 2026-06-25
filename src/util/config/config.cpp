@@ -532,9 +532,11 @@ namespace dxvk {
       { "d3d9.lenientClear",                "True" },
       { "d3d9.supportDFFormats",           "False" },
     }} },
-    /* Gothic 3                                   */
+    /* Gothic 3 - Rendering such as water broken  *
+     * on non strict float path with dxvk 3.0     */
     { R"(\\Gothic(3|3Final| III Forsaken Gods)\.exe$)", {{
       { "d3d9.supportDFFormats",           "False" },
+      { "d3d9.floatEmulation",            "Strict" },
     }} },
     /* Sonic Adventure 2                          */
     { R"(\\Sonic Adventure 2\\(launcher|sonic2app)\.exe$)", {{
@@ -1168,6 +1170,11 @@ namespace dxvk {
      * in order to start up properly              */
     { R"(\\SCSDestinations\.exe$)", {{
       { "d3d9.supportCubeDepthFormats",     "True" },
+    }} },
+    /* Splinter Cell: Double Agent                *
+     * AMD path have a semi or fully black world  */
+    { R"(\\(SplinterCell4|SCDA_online)\.exe$)", {{
+      { "d3d9.hideAmdGpu",                  "True" },
     }} },
 
     /**********************************************/
