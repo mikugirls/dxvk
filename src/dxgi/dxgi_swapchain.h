@@ -113,6 +113,7 @@ namespace dxvk {
             DXGI_FORMAT               NewFormat,
             UINT                      SwapChainFlags) final;
     
+    DXVK_HOTPATCHABLE
     HRESULT STDMETHODCALLTYPE ResizeBuffers1(
             UINT                      BufferCount,
             UINT                      Width,
@@ -122,6 +123,7 @@ namespace dxvk {
       const UINT*                     pCreationNodeMask,
             IUnknown* const*          ppPresentQueue) final;
 
+    DXVK_HOTPATCHABLE
     HRESULT STDMETHODCALLTYPE ResizeTarget(
       const DXGI_MODE_DESC*           pNewTargetParameters) final;
     
