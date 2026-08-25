@@ -358,14 +358,21 @@ namespace dxvk {
   
   
   void DxvkContext::clearRenderTarget(
-    const Rc<DxvkImageView>&    imageView,
+    const DxvkAttachment&       attachment,
           VkImageAspectFlags    clearAspects,
           VkClearValue          clearValue,
           VkImageAspectFlags    discardAspects) {
     // Make sure the color components are ordered correctly
     if (clearAspects & VK_IMAGE_ASPECT_COLOR_BIT) {
       clearValue.color = util::swizzleClearColor(clearValue.color,
-        util::invertComponentMapping(imageView->info().unpackSwizzle()));
+        util::invertComponentMapping(attachment.view->info().unpackSwizzle()));
+    }
+
+    // If this is a buffer attachment and we can clear the view
+    // directly, do that instead and ignore the image entirely.
+    if (attachment.shadow && attachment.shadow->info().format) {
+      clearBufferView(attachment.shadow, 0u, attachment.view->mipLevelExtent(0u).width, clearValue.color);
+      return;
     }
 
     // Check whether the render target view is an attachment
@@ -373,8 +380,8 @@ namespace dxvk {
     // If not, we need to create a temporary framebuffer.
     int32_t attachmentIndex = -1;
 
-    if (m_state.om.framebufferInfo.isFullSize(imageView))
-      attachmentIndex = m_state.om.framebufferInfo.findAttachment(imageView);
+    if (m_state.om.framebufferInfo.isFullSize(attachment.view))
+      attachmentIndex = m_state.om.framebufferInfo.findAttachment(attachment.view);
 
     if (attachmentIndex < 0) {
       // Suspend works here because we'll end up with one of these scenarios:
@@ -396,18 +403,23 @@ namespace dxvk {
     // useful to adjust store ops for tilers, and ensures that pending resolves
     // are handled correctly.
     if (discardAspects)
-      this->deferDiscard(imageView, discardAspects);
+      this->deferDiscard(attachment.view, discardAspects);
 
     if (clearAspects)
-      this->deferClear(imageView, clearAspects, clearValue);
+      this->deferClear(attachment.view, clearAspects, clearValue);
 
     // Invalidate implicit resolves
-    if (imageView->isMultisampled()) {
-      auto subresources = imageView->imageSubresources();
+    if (attachment.view->isMultisampled()) {
+      auto subresources = attachment.view->imageSubresources();
       subresources.aspectMask = clearAspects;
 
-      m_implicitResolves.invalidate(*imageView->image(), subresources);
+      m_implicitResolves.invalidate(*attachment.view->image(), subresources);
     }
+
+    // On the off-chance that this is a buffer attachment, update the buffer.
+    // Don't care about optimizing deferred clears, this is extremely rare.
+    if (unlikely(attachment.shadow))
+      releaseShadowAttachment(attachment);
   }
   
   
@@ -1968,6 +1980,48 @@ namespace dxvk {
   }
   
   
+  void DxvkContext::acquireShadowAttachment(const DxvkAttachment& attachment) {
+    copyBufferToImage(attachment.view->image(),
+      vk::pickSubresourceLayers(attachment.view->imageSubresources(), 0u),
+      VkOffset3D(),
+      attachment.view->mipLevelExtent(0u),
+      attachment.shadow->buffer(),
+      attachment.shadow->info().offset, 0u, 0u,
+      attachment.view->info().format);
+  }
+
+
+  void DxvkContext::releaseShadowAttachment(const DxvkAttachment& attachment) {
+    copyImageToBuffer(
+      attachment.shadow->buffer(),
+      attachment.shadow->info().offset, 0u, 0u,
+      attachment.view->info().format,
+      attachment.view->image(),
+      vk::pickSubresourceLayers(attachment.view->imageSubresources(), 0u),
+      VkOffset3D(), attachment.view->mipLevelExtent(0u));
+  }
+
+
+  void DxvkContext::acquireShadowAttachments() {
+    for (uint32_t i = 0u; i < m_state.om.framebufferInfo.numAttachments(); i++) {
+      const auto& attachment = m_state.om.framebufferInfo.getAttachment(i);
+
+      if (unlikely(attachment.shadow))
+        acquireShadowAttachment(attachment);
+    }
+  }
+
+
+  void DxvkContext::releaseShadowAttachments() {
+    for (uint32_t i = 0u; i < m_state.om.framebufferInfo.numAttachments(); i++) {
+      const auto& attachment = m_state.om.framebufferInfo.getAttachment(i);
+
+      if (unlikely(attachment.shadow))
+        releaseShadowAttachment(attachment);
+    }
+  }
+
+
   VkAttachmentStoreOp DxvkContext::determineClearStoreOp(
           VkAttachmentLoadOp        loadOp) const {
     if (loadOp == VK_ATTACHMENT_LOAD_OP_NONE)
@@ -4102,7 +4156,10 @@ namespace dxvk {
     // Use regular render target clear path if we're clearing the
     // entire view to hit some additional optimizations.
     if (extent == imageView->mipLevelExtent(0u)) {
-      clearRenderTarget(imageView, aspect, value, 0u);
+      DxvkAttachment attachment = {};
+      attachment.view = imageView;
+
+      clearRenderTarget(attachment, aspect, value, 0u);
       return;
     }
 
@@ -4725,8 +4782,10 @@ namespace dxvk {
     if (dstImage->mipLevelExtent(dstSubresource.mipLevel, dstSubresource.aspectMask) != dstExtent)
       return false;
 
-    clearRenderTarget(dstImage->createView(viewInfo),
-      srcSubresource.aspectMask, clear->clearValue, 0u);
+    DxvkAttachment attachment = {};
+    attachment.view = dstImage->createView(viewInfo);
+
+    clearRenderTarget(attachment, srcSubresource.aspectMask, clear->clearValue, 0u);
     return true;
   }
 
@@ -6089,6 +6148,7 @@ namespace dxvk {
       if (unlikely(m_features.test(DxvkContextFeature::DebugUtils)))
         popDebugRegion(util::DxvkDebugLabelType::InternalBarrierControl);
 
+      acquireShadowAttachments();
       prepareShaderReadableImages(true);
 
       // Make sure all graphics state gets reapplied on the next draw
@@ -6187,6 +6247,8 @@ namespace dxvk {
 
       if (unlikely(m_features.test(DxvkContextFeature::DebugUtils)))
         popDebugRegion(util::DxvkDebugLabelType::InternalRenderPass);
+
+      releaseShadowAttachments();
     } else if (!suspend) {
       // We may be ending a previously suspended render pass
       m_flags.clr(DxvkContextFlag::GpRenderPassSuspended);
